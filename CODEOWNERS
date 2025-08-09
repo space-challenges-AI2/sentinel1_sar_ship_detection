@@ -1,0 +1,16 @@
+*            @amanarora9848
+
+*.js         @js-owner @amanarora9848
+*.go         docs@example.com @amanarora9848
+*.txt        @octo-org/octocats @amanarora9848
+
+/build/logs/ @doctocat @amanarora9848
+docs/*       docs@example.com @amanarora9848
+apps/        @octocat @amanarora9848
+/docs/       @doctocat @amanarora9848
+/scripts/    @doctocat @octocat @amanarora9848
+**/logs      @octocat @amanarora9848
+
+# Keep apps/github owned, not empty:
+/apps/       @octocat @amanarora9848
+/apps/github @doctocat @amanarora9848
