@@ -1,9 +1,10 @@
-
 """
 fabf.py - Fast Adaptive Bilateral Filter (reference Python implementation)
 
 Public API:
     adaptive_bilateral_filter(f, sigma_map=None, theta_map=None, rho=5.0, N=5, out_path=None, clip=True)
+
+Author: @niko-dil (Nikola Lilov)
 """
 
 import numpy as np
