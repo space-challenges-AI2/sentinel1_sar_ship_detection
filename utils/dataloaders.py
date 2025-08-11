@@ -34,6 +34,8 @@ from utils.general import (DATASETS_DIR, LOGGER, NUM_THREADS, TQDM_BAR_FORMAT, c
                            check_yaml, clean_str, cv2, is_colab, is_kaggle, segments2boxes, unzip_file, xyn2xy,
                            xywh2xyxy, xywhn2xyxy, xyxy2xywhn)
 from utils.torch_utils import torch_distributed_zero_first
+from utils.denoising import apply_denoising
+from utils.denoising.integration import apply_denoising_to_image
 
 # Parameters
 HELP_URL = 'See https://github.com/ultralytics/yolov5/wiki/Train-Custom-Data'
@@ -116,7 +118,8 @@ def create_dataloader(path,
                       quad=False,
                       prefix='',
                       shuffle=False,
-                      seed=0):
+                      seed=0,
+                      denoise_params=None):
     if rect and shuffle:
         LOGGER.warning('WARNING ⚠️ --rect is incompatible with DataLoader shuffle, setting shuffle=False')
         shuffle = False
@@ -133,7 +136,8 @@ def create_dataloader(path,
             stride=int(stride),
             pad=pad,
             image_weights=image_weights,
-            prefix=prefix)
+            prefix=prefix,
+            denoise_params=denoise_params)
 
     batch_size = min(batch_size, len(dataset))
     nd = torch.cuda.device_count()  # number of CUDA devices
@@ -189,7 +193,7 @@ class _RepeatSampler:
 
 class LoadScreenshots:
     # YOLOv5 screenshot dataloader, i.e. `python detect.py --source "screen 0 100 100 512 256"`
-    def __init__(self, source, img_size=640, stride=32, auto=True, transforms=None):
+    def __init__(self, source, img_size=640, stride=32, auto=True, transforms=None, denoise_params=None):
         # source = [screen_number left top width height] (pixels)
         check_requirements('mss')
         import mss
@@ -209,6 +213,7 @@ class LoadScreenshots:
         self.mode = 'stream'
         self.frame = 0
         self.sct = mss.mss()
+        self.denoise_params = denoise_params or {}
 
         # Parse monitor shape
         monitor = self.sct.monitors[self.screen]
@@ -238,7 +243,7 @@ class LoadScreenshots:
 
 class LoadImages:
     # YOLOv5 image/video dataloader, i.e. `python detect.py --source image.jpg/vid.mp4`
-    def __init__(self, path, img_size=640, stride=32, auto=True, transforms=None, vid_stride=1):
+    def __init__(self, path, img_size=640, stride=32, auto=True, transforms=None, vid_stride=1, denoise_params=None):
         if isinstance(path, str) and Path(path).suffix == ".txt":  # *.txt file with img/vid/dir on each line
             path = Path(path).read_text().rsplit()
         files = []
@@ -266,6 +271,8 @@ class LoadImages:
         self.auto = auto
         self.transforms = transforms  # optional
         self.vid_stride = vid_stride  # video frame-rate stride
+        self.denoise_params = denoise_params or {}
+
         if any(videos):
             self._new_video(videos[0])  # new video
         else:
@@ -304,8 +311,17 @@ class LoadImages:
         else:
             # Read image
             self.count += 1
-            im0 = cv2.imread(path)  # BGR
+            im0 = cv2.imread(path)  # BGR   
             assert im0 is not None, f'Image Not Found {path}'
+
+            # Apply denoising if enabled
+            if self.denoise_params and self.denoise_params.get('enabled', False):
+                # Add debug logging
+                self.denoise_counter += 1
+                if self.denoise_counter % 3 == 0:  # Log every 100th denoised image
+                    print(f"\n{'='*40}\n*** DENOISED {self.denoise_counter} IMAGES SO FAR ***\n{'='*40}\n")
+                im0 = apply_denoising_to_image(im0, self.denoise_params, convert_bgr=True)
+
             s = f'image {self.count}/{self.nf} {path}: '
 
         if self.transforms:
@@ -316,6 +332,31 @@ class LoadImages:
             im = np.ascontiguousarray(im)  # contiguous
 
         return path, im, im0, self.cap, s
+
+    def _apply_denoising(self, image):
+        """
+        Apply denoising to the image based on parameters
+        """
+        if not self.denoise_params.get('enabled', False):
+            return image
+        
+        # Convert BGR to RGB for denoising
+        image_rgb = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+        
+        # Apply denoising
+        denoised_rgb = apply_denoising(
+            image_rgb,
+            method=self.denoise_params.get('method', 'fabf'),
+            probability=self.denoise_params.get('probability', 1.0),
+            rho=self.denoise_params.get('rho', 5.0),
+            N=self.denoise_params.get('N', 5),
+            sigma_map=self.denoise_params.get('sigma', 0.1),
+            theta_map=self.denoise_params.get('theta'),
+            clip=self.denoise_params.get('clip', True)
+        )
+
+        # Convert back to BGR
+        return cv2.cvtColor(denoised_rgb, cv2.COLOR_RGB2BGR)
 
     def _new_video(self, path):
         # Create a new video capture object
@@ -341,12 +382,13 @@ class LoadImages:
 
 class LoadStreams:
     # YOLOv5 streamloader, i.e. `python detect.py --source 'rtsp://example.com/media.mp4'  # RTSP, RTMP, HTTP streams`
-    def __init__(self, sources='file.streams', img_size=640, stride=32, auto=True, transforms=None, vid_stride=1):
+    def __init__(self, sources='file.streams', img_size=640, stride=32, auto=True, transforms=None, vid_stride=1, denoise_params=None):
         torch.backends.cudnn.benchmark = True  # faster for fixed-size inference
         self.mode = 'stream'
         self.img_size = img_size
         self.stride = stride
         self.vid_stride = vid_stride  # video frame-rate stride
+        self.denoise_params = denoise_params or {}
         sources = Path(sources).read_text().rsplit() if os.path.isfile(sources) else [sources]
         n = len(sources)
         self.sources = [clean_str(x) for x in sources]  # clean source names for later
@@ -412,6 +454,11 @@ class LoadStreams:
             raise StopIteration
 
         im0 = self.imgs.copy()
+        
+        # Apply denoising if enabled
+        if self.denoise_params and self.denoise_params.get('enabled', False):
+            im0 = [apply_denoising_to_image(img, self.denoise_params, convert_bgr=True) for img in im0]
+        
         if self.transforms:
             im = np.stack([self.transforms(x) for x in im0])  # transforms
         else:
@@ -449,7 +496,8 @@ class LoadImagesAndLabels(Dataset):
                  stride=32,
                  pad=0.0,
                  min_items=0,
-                 prefix=''):
+                 prefix='',
+                 denoise_params=None):
         self.img_size = img_size
         self.augment = augment
         self.hyp = hyp
@@ -460,6 +508,17 @@ class LoadImagesAndLabels(Dataset):
         self.stride = stride
         self.path = path
         self.albumentations = Albumentations(size=img_size) if augment else None
+        self.denoise_params = denoise_params or {}
+        self.denoise_counter = 0  # Add counter for debugging
+        self.denoised_cache = {}  # Cache for denoised images
+        self.denoised_cache_dir = None  # Directory for persistent cache
+
+        # Setup denoising cache directory
+        if self.denoise_params and self.denoise_params.get('enabled', False):
+            cache_name = f"denoised_{self.denoise_params['method']}_{self.denoise_params['rho']}_{self.denoise_params['N']}_{self.denoise_params['sigma']}"
+            self.denoised_cache_dir = Path(f"./cache/{cache_name}")
+            self.denoised_cache_dir.mkdir(parents=True, exist_ok=True)
+            LOGGER.info(f"Denoising cache directory: {self.denoised_cache_dir}")
 
         try:
             f = []  # image files
@@ -733,6 +792,18 @@ class LoadImagesAndLabels(Dataset):
             else:  # read image
                 im = cv2.imread(f)  # BGR
                 assert im is not None, f'Image Not Found {f}'
+
+            # Apply denoising if enabled
+            if self.denoise_params and self.denoise_params.get('enabled', False):
+                # Add debug logging
+                self.denoise_counter += 1
+                if self.denoise_counter % 100 == 0:  # Then log every 100th
+                    print(f"DENOISING: Applied to {self.denoise_counter} images so far")
+                
+                # im = apply_denoising_to_image(im, self.denoise_params, convert_bgr=True)
+
+                im = self._apply_denoising_with_cache(im, f, i)
+            
             h0, w0 = im.shape[:2]  # orig hw
             r = self.img_size / max(h0, w0)  # ratio
             if r != 1:  # if sizes are not equal
@@ -741,11 +812,131 @@ class LoadImagesAndLabels(Dataset):
             return im, (h0, w0), im.shape[:2]  # im, hw_original, hw_resized
         return self.ims[i], self.im_hw0[i], self.im_hw[i]  # im, hw_original, hw_resized
 
+    def _apply_denoising(self, image):
+        """
+        Apply denoising to the image based on parameters.
+        """
+        if not self.denoise_params.get('enabled', False):
+            return image
+
+        # Convert BGR to RGB for denoising
+        image_rgb = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+
+        # Apply denoising
+        denoised_rgb = apply_denoising(
+            image_rgb,
+            method=self.denoise_params.get('method', 'fabf'),
+            probability=self.denoise_params.get('probability', 1.0),
+            rho=self.denoise_params.get('rho', 5.0),
+            N=self.denoise_params.get('N', 5),
+            sigma=self.denoise_params.get('sigma', 0.1),
+            theta=self.denoise_params.get('theta', None),
+            clip=self.denoise_params.get('clip', True)
+        )
+
+        # Convert back to BGR
+        return cv2.cvtColor(denoised_rgb, cv2.COLOR_RGB2BGR)
+
+    def _apply_denoising_with_cache(self, image, image_path, image_index):
+        """
+        Apply denoising with intelligent caching to avoid recomputation.
+        """
+        if not self.denoise_params.get('enabled', False):
+            return image
+        
+        # Check if we should clear cache
+        if self._should_clear_cache():
+            print("Memory threshold reached, clearing denoising cache...")
+            self.clear_denoising_cache()
+        
+        # Create cache key based on image path and denoising parameters
+        cache_key = f"{Path(image_path).stem}_{image.shape[0]}_{image.shape[1]}"
+        
+        # Check memory cache first
+        if cache_key in self.denoised_cache:
+            self.denoise_counter += 1
+            if self.denoise_counter % 100 == 0:
+                print(f"DENOISING: Cache hit for {self.denoise_counter} images so far")
+            return self.denoised_cache[cache_key]
+        
+        # Check disk cache
+        cache_file = self.denoised_cache_dir / f"{cache_key}.npy"
+        if cache_file.exists():
+            try:
+                cached_image = np.load(cache_file)
+                # Store in memory cache
+                self.denoised_cache[cache_key] = cached_image
+                self.denoise_counter += 1
+                if self.denoise_counter % 100 == 0:
+                    print(f"DENOISING: Disk cache hit for {self.denoise_counter} images so far")
+                return cached_image
+            except Exception as e:
+                print(f"Warning: Failed to load cached denoised image: {e}")
+        
+        # Apply denoising (first time for this image)
+        print(f"DENOISING: Processing image {image_index} (first time)")
+        start_time = time.time()
+        
+        denoised_image = apply_denoising_to_image(image, self.denoise_params, convert_bgr=True)
+        
+        elapsed = time.time() - start_time
+        print(f"DENOISING: Completed image {image_index} in {elapsed:.2f}s")
+        
+        # Cache the result
+        self.denoised_cache[cache_key] = denoised_image
+        
+        # Save to disk cache for persistence across runs
+        try:
+            np.save(cache_file, denoised_image)
+        except Exception as e:
+            print(f"Warning: Failed to save denoised image to cache: {e}")
+        
+        return denoised_image
+
+    def clear_denoising_cache(self):
+        """Clear the denoising cache to free memory."""
+        self.denoised_cache.clear()
+        import gc
+        gc.collect()
+        print("Denoising cache cleared")
+        
     def cache_images_to_disk(self, i):
         # Saves an image as an *.npy file for faster loading
         f = self.npy_files[i]
         if not f.exists():
             np.save(f.as_posix(), cv2.imread(self.im_files[i]))
+
+    def clear_denoising_cache(self):
+        """Clear the denoising cache to free memory."""
+        cache_size_before = len(self.denoised_cache)
+        memory_before = self._get_memory_usage()
+        
+        self.denoised_cache.clear()
+        import gc
+        gc.collect()
+        
+        cache_size_after = len(self.denoised_cache)
+        memory_after = self._get_memory_usage()
+        
+        print(f"Denoising cache cleared: {cache_size_before} -> {cache_size_after} images")
+        print(f"Memory freed: {memory_before - memory_after:.1f} MB")
+
+    def _get_memory_usage(self):
+        """Get current memory usage in MB."""
+        import psutil
+        process = psutil.Process()
+        return process.memory_info().rss / (1024 * 1024)
+
+    def _should_clear_cache(self):
+        """Check if cache should be cleared based on memory usage."""
+        if len(self.denoised_cache) > 1000:  # Clear if more than 1000 images cached
+            return True
+        
+        memory_usage = self._get_memory_usage()
+        if memory_usage > 8000:  # Clear if using more than 8GB
+            return True
+        
+        return False
 
     def load_mosaic(self, index):
         # YOLOv5 4-mosaic loader. Loads 1 image + 3 random images into a 4-image mosaic
