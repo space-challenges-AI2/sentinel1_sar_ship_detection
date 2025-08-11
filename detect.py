@@ -48,6 +48,7 @@ from utils.general import (LOGGER, Profile, check_file, check_img_size, check_im
                            increment_path, non_max_suppression, print_args, scale_boxes, strip_optimizer, xyxy2xywh)
 from utils.plots import Annotator, colors, save_one_box
 from utils.torch_utils import select_device, smart_inference_mode
+from utils.denoising.integration import prepare_denoise_params_from_args, log_denoising_config
 
 
 @smart_inference_mode()
@@ -79,6 +80,13 @@ def run(
         half=False,  # use FP16 half-precision inference
         dnn=False,  # use OpenCV DNN for ONNX inference
         vid_stride=1,  # video frame-rate stride
+        denoise=0.0,
+        denoise_method='fabf',
+        denoise_rho=5.0,
+        denoise_N=5,
+        denoise_sigma=0.1,
+        denoise_theta=None,
+        denoise_clip=True
 ):
     # Process input source
     source = str(source)
@@ -110,16 +118,30 @@ def run(
     # Check image size (adjust to match model stride)
     imgsz = check_img_size(imgsz, s=stride)
 
+    # Prepare denoising parameters
+    denoise_params = {
+        'enabled': denoise > 0.0,
+        'probability': denoise,
+        'method': denoise_method,
+        'rho': denoise_rho,
+        'N': denoise_N,
+        'sigma': denoise_sigma,
+        'theta': denoise_theta,
+        'clip': denoise_clip
+    }
+
+    log_denoising_config(denoise_params)
+
     # Data loader
     bs = 1  # batch size
     if webcam:
         view_img = check_imshow(warn=True)
-        dataset = LoadStreams(source, img_size=imgsz, stride=stride, auto=pt, vid_stride=vid_stride)
+        dataset = LoadStreams(source, img_size=imgsz, stride=stride, auto=pt, vid_stride=vid_stride, denoise_params=denoise_params)
         bs = len(dataset)
     elif screenshot:
-        dataset = LoadScreenshots(source, img_size=imgsz, stride=stride, auto=pt)
+        dataset = LoadScreenshots(source, img_size=imgsz, stride=stride, auto=pt, denoise_params=denoise_params)
     else:
-        dataset = LoadImages(source, img_size=imgsz, stride=stride, auto=pt, vid_stride=vid_stride)
+        dataset = LoadImages(source, img_size=imgsz, stride=stride, auto=pt, vid_stride=vid_stride, denoise_params=denoise_params)
     vid_path, vid_writer = [None] * bs, [None] * bs
 
     # Run inference
@@ -293,6 +315,16 @@ def parse_opt():
     parser.add_argument('--half', action='store_true', help='use FP16 half-precision inference')
     parser.add_argument('--dnn', action='store_true', help='use OpenCV DNN for ONNX inference')
     parser.add_argument('--vid-stride', type=int, default=1, help='video frame-rate stride')
+
+    # Denoising arguments
+    parser.add_argument('--denoise', type=float, default=0.0, help='probability of applying denoising (0.0 to 1.0)')
+    parser.add_argument('--denoise-method', type=str, default='fabf', help='denoising method: fabf or custom')
+    parser.add_argument('--denoise-rho', type=float, default=5.0, help='FABF spatial window radius')
+    parser.add_argument('--denoise-N', type=int, default=5, help='FABF polynomial order')
+    parser.add_argument('--denoise-sigma', type=float, default=0.1, help='FABF noise level')
+    parser.add_argument('--denoise-theta', type=float, default=None, help='FABF target intensity')
+    parser.add_argument('--denoise-clip', action='store_true', default=True, help='FABF clip output to [0, 1]')
+    
     opt = parser.parse_args()
     opt.imgsz *= 2 if len(opt.imgsz) == 1 else 1  # expand
     print_args(vars(opt))
