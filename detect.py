@@ -49,6 +49,7 @@ from utils.general import (LOGGER, Profile, check_file, check_img_size, check_im
 from utils.plots import Annotator, colors, save_one_box
 from utils.torch_utils import select_device, smart_inference_mode
 from utils.denoising.integration import prepare_denoise_params_from_args, log_denoising_config
+from utils.sliced_inference import create_sliced_inference_from_args, log_sliced_inference_config
 
 
 @smart_inference_mode()
@@ -86,7 +87,14 @@ def run(
         denoise_N=5,
         denoise_sigma=0.1,
         denoise_theta=None,
-        denoise_clip=True
+        denoise_clip=True,
+        sliced_inference=False,
+        sliced_tile_size=640,
+        sliced_overlap=0.2,
+        sliced_min_tile_size=320,
+        sliced_max_tile_size=1024,
+        sliced_adaptive=True,
+        sliced_merge_strategy='nms'
 ):
     # Process input source
     source = str(source)
@@ -132,6 +140,18 @@ def run(
 
     log_denoising_config(denoise_params)
 
+    # Initialize sliced inference
+    sliced_inference = create_sliced_inference_from_args(type('Args', (), {
+        'sliced_inference': sliced_inference,
+        'sliced_tile_size': sliced_tile_size,
+        'sliced_overlap': sliced_overlap,
+        'sliced_min_tile_size': sliced_min_tile_size,
+        'sliced_max_tile_size': sliced_max_tile_size,
+        'sliced_adaptive': sliced_adaptive,
+        'sliced_merge_strategy': sliced_merge_strategy
+    })())
+    log_sliced_inference_config(sliced_inference, LOGGER)
+
     # Data loader
     bs = 1  # batch size
     if webcam:
@@ -141,7 +161,29 @@ def run(
     elif screenshot:
         dataset = LoadScreenshots(source, img_size=imgsz, stride=stride, auto=pt, denoise_params=denoise_params)
     else:
-        dataset = LoadImages(source, img_size=imgsz, stride=stride, auto=pt, vid_stride=vid_stride, denoise_params=denoise_params)
+        # For sliced inference, we need the original image size
+        if sliced_inference:
+            # Load image without resizing for size check
+            import cv2
+            original_image = cv2.imread(str(source))
+            if original_image is not None:
+                original_h, original_w = original_image.shape[:2]
+                LOGGER.info(f"Original image size: {original_w}x{original_h}")
+                
+                # Only use sliced inference if image is large enough
+                if max(original_h, original_w) > sliced_inference.tile_size * 1.5:
+                    LOGGER.info(" Image large enough for sliced inference - bypassing standard resizing")
+                    # Load with minimal resizing just for compatibility
+                    dataset = LoadImages(source, img_size=(original_h, original_w), stride=stride, auto=pt, vid_stride=vid_stride, denoise_params=denoise_params)
+                else:
+                    LOGGER.info("ℹ️ Image too small for sliced inference, using standard pipeline")
+                    dataset = LoadImages(source, img_size=imgsz, stride=stride, auto=pt, vid_stride=vid_stride, denoise_params=denoise_params)
+            else:
+                LOGGER.warning("Could not load image for size check, using standard pipeline")
+                dataset = LoadImages(source, img_size=imgsz, stride=stride, auto=pt, vid_stride=vid_stride, denoise_params=denoise_params)
+        else:
+            # Standard inference - use normal resizing
+            dataset = LoadImages(source, img_size=imgsz, stride=stride, auto=pt, vid_stride=vid_stride, denoise_params=denoise_params)
     vid_path, vid_writer = [None] * bs, [None] * bs
 
     # Run inference
@@ -165,13 +207,27 @@ def run(
         with dt[1]:
             # If feature visualization is enabled, create a unique directory for each image
             visualize = increment_path(save_dir / Path(path).stem, mkdir=True) if visualize else False
-            # Run the model forward pass
-            pred = model(im, augment=augment, visualize=visualize)
+            
+            # Use sliced inference if enabled and image is large enough
+            if sliced_inference and max(im0s.shape[:2]) > sliced_inference.tile_size * 1.5:
+                LOGGER.info(f"Using sliced inference for large image {im0s.shape[1]}x{im0s.shape[0]}")
+                pred = sliced_inference.process_image(
+                    im0s, model, stride, conf_thres, iou_thres, max_det, device
+                )
+                # Add batch dimension for consistency with standard inference
+                pred = [pred]
+                # Skip NMS since sliced inference already handled it
+                skip_nms = True
+            else:
+                # Run the model forward pass (standard inference)
+                pred = model(im, augment=augment, visualize=visualize)
+                skip_nms = False
 
-        # Non-Maximum Suppression (NMS)
+        # Non-Maximum Suppression (NMS) - only for standard inference
         with dt[2]:
-            # Apply NMS to remove redundant overlapping boxes
-            pred = non_max_suppression(pred, conf_thres, iou_thres, classes, agnostic_nms, max_det=max_det)
+            if not skip_nms:
+                # Apply NMS to remove redundant overlapping boxes
+                pred = non_max_suppression(pred, conf_thres, iou_thres, classes, agnostic_nms, max_det=max_det)
 
         # Process predictions
         for i, det in enumerate(pred):  # process detections for each image
@@ -324,6 +380,15 @@ def parse_opt():
     parser.add_argument('--denoise-sigma', type=float, default=0.1, help='FABF noise level')
     parser.add_argument('--denoise-theta', type=float, default=None, help='FABF target intensity')
     parser.add_argument('--denoise-clip', action='store_true', default=True, help='FABF clip output to [0, 1]')
+    
+    # Sliced inference arguments
+    parser.add_argument('--sliced-inference', action='store_true', help='Enable sliced inference for large images')
+    parser.add_argument('--sliced-tile-size', type=int, default=640, help='Base tile size for sliced inference')
+    parser.add_argument('--sliced-overlap', type=float, default=0.2, help='Overlap ratio between tiles (0.0 to 0.5)')
+    parser.add_argument('--sliced-min-tile-size', type=int, default=320, help='Minimum tile size allowed')
+    parser.add_argument('--sliced-max-tile-size', type=int, default=1024, help='Maximum tile size allowed')
+    parser.add_argument('--sliced-adaptive', action='store_true', default=True, help='Enable adaptive tile sizing')
+    parser.add_argument('--sliced-merge-strategy', type=str, default='nms', choices=['nms', 'weighted', 'confidence'], help='Strategy for merging tile predictions')
     
     opt = parser.parse_args()
     opt.imgsz *= 2 if len(opt.imgsz) == 1 else 1  # expand
