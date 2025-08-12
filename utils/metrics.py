@@ -177,11 +177,59 @@ class ConfusionMatrix:
                 if not any(m1 == i):
                     self.matrix[dc, self.nc] += 1  # predicted background
 
+    def tp_fp_fn(self):
+        """Enhanced method to return TP, FP, and FN for each class"""
+        tp = self.matrix.diagonal()[:-1]  # true positives (remove background class)
+        fp = self.matrix.sum(1)[:-1] - tp  # false positives (remove background class)
+        fn = self.matrix.sum(0)[:-1] - tp  # false negatives (remove background class)
+        return tp, fp, fn
+
     def tp_fp(self):
         tp = self.matrix.diagonal()  # true positives
         fp = self.matrix.sum(1) - tp  # false positives
         # fn = self.matrix.sum(0) - tp  # false negatives (missed detections)
         return tp[:-1], fp[:-1]  # remove background class
+
+    def get_detailed_metrics(self, names=None):
+        """Get detailed metrics including TP, FP, FN, Precision, Recall, F1 for each class"""
+        tp, fp, fn = self.tp_fp_fn()
+        
+        # Calculate precision, recall, and F1
+        precision = tp / (tp + fp + 1e-9)  # avoid division by zero
+        recall = tp / (tp + fn + 1e-9)     # avoid division by zero
+        f1 = 2 * precision * recall / (precision + recall + 1e-9)  # avoid division by zero
+        
+        # Create detailed metrics dictionary
+        metrics = {}
+        for i in range(len(tp)):
+            class_name = names[i] if names and i < len(names) else f'class_{i}'
+            metrics[class_name] = {
+                'TP': int(tp[i]),
+                'FP': int(fp[i]),
+                'FN': int(fn[i]),
+                'Precision': float(precision[i]),
+                'Recall': float(recall[i]),
+                'F1': float(f1[i])
+            }
+        
+        # Overall metrics
+        total_tp = tp.sum()
+        total_fp = fp.sum()
+        total_fn = fn.sum()
+        overall_precision = total_tp / (total_tp + total_fp + 1e-9)
+        overall_recall = total_tp / (total_tp + total_fn + 1e-9)
+        overall_f1 = 2 * overall_precision * overall_recall / (overall_precision + overall_recall + 1e-9)
+        
+        metrics['overall'] = {
+            'TP': int(total_tp),
+            'FP': int(total_fp),
+            'FN': int(total_fn),
+            'Precision': float(overall_precision),
+            'Recall': float(overall_recall),
+            'F1': float(overall_f1)
+        }
+        
+        return metrics
 
     @TryExcept('WARNING ⚠️ ConfusionMatrix plot failure')
     def plot(self, normalize=True, save_dir='', names=()):
@@ -226,7 +274,113 @@ class ConfusionMatrix:
 #     if xywh:  # transform from xywh to xyxy
 #         (x1, y1, w1, h1), (x2, y2, w2, h2) = box1.chunk(4, -1), box2.chunk(4, -1)
 #         w1_, h1_, w2_, h2_ = w1 / 2, h1 / 2, w2 / 2, h2 / 2
-#         b1_x1, b1_x2, b1_y1, b1_y2 = x1 - w1_, x1 + w1_, y1 - h1_, y1 + h1_
+#         b1_x1, b1_x2, b1_y1, b1_y2 = x1 - w1_, x1 + w1_, y1 - h1_, y1 + h1_class ConfusionMatrix:
+    # Updated version of https://github.com/kaanakan/object_detection_confusion_matrix
+    def __init__(self, nc, conf=0.25, iou_thres=0.45):
+        self.matrix = np.zeros((nc + 1, nc + 1))
+        self.nc = nc  # number of classes
+        self.conf = conf
+        self.iou_thres = iou_thres
+    
+    def process_batch(self, detections, labels):
+        """
+        Return intersection-over-union (Jaccard index) of boxes.
+        Both sets of boxes are expected to be in (x1, y1, x2, y2) format.
+        Arguments:
+            detections (Array[N, 6]), x1, y1, x2, y2, conf, class
+            labels (Array[M, 5]), class, x1, y1, x2, y2
+        Returns:
+            None, updates confusion matrix accordingly
+        """
+        if detections is None:
+            gt_classes = labels.int()
+            for gc in gt_classes:
+                self.matrix[self.nc, gc] += 1  # background FN
+            return
+
+        detections = detections[detections[:, 4] > self.conf]
+        gt_classes = labels[:, 0].int()
+        detection_classes = detections[:, 5].int()
+        iou = box_iou(labels[:, 1:], detections[:, :4])
+
+        x = torch.where(iou > self.iou_thres)
+        if x[0].shape[0]:
+            matches = torch.cat((torch.stack(x, 1), iou[x[0], x[1]][:, None]), 1).cpu().numpy()
+            if x[0].shape[0] > 1:
+                matches = matches[matches[:, 2].argsort()[::-1]]
+                matches = matches[np.unique(matches[:, 1], return_index=True)[1]]
+                matches = matches[matches[:, 2].argsort()[::-1]]
+                matches = matches[np.unique(matches[:, 0], return_index=True)[1]]
+        else:
+            matches = np.zeros((0, 3))
+
+        n = matches.shape[0] > 0
+        m0, m1, _ = matches.transpose().astype(int)
+        for i, gc in enumerate(gt_classes):
+            j = m0 == i
+            if n and sum(j) == 1:
+                self.matrix[detection_classes[m1[j]], gc] += 1  # correct
+            else:
+                self.matrix[self.nc, gc] += 1  # true background
+
+        if n:
+            for i, dc in enumerate(detection_classes):
+                if not any(m1 == i):
+                    self.matrix[dc, self.nc] += 1  # predicted background
+
+        def tp_fp_fn(self):
+            """Enhanced method to return TP, FP, and FN for each class"""
+            tp = self.matrix.diagonal()[:-1]  # true positives (remove background class)
+            fp = self.matrix.sum(1)[:-1] - tp  # false positives (remove background class)
+            fn = self.matrix.sum(0)[:-1] - tp  # false negatives (remove background class)
+            return tp, fp, fn
+
+        def tp_fp(self):
+            tp = self.matrix.diagonal()  # true positives
+            fp = self.matrix.sum(1) - tp  # false positives
+            # fn = self.matrix.sum(0) - tp  # false negatives (missed detections)
+            return tp[:-1], fp[:-1]  # remove background class
+
+        def get_detailed_metrics(self, names=None):
+            """Get detailed metrics including TP, FP, FN, Precision, Recall, F1 for each class"""
+            tp, fp, fn = self.tp_fp_fn()
+            
+            # Calculate precision, recall, and F1
+            precision = tp / (tp + fp + 1e-9)  # avoid division by zero
+            recall = tp / (tp + fn + 1e-9)     # avoid division by zero
+            f1 = 2 * precision * recall / (precision + recall + 1e-9)  # avoid division by zero
+            
+            # Create detailed metrics dictionary
+            metrics = {}
+            for i in range(len(tp)):
+                class_name = names[i] if names and i < len(names) else f'class_{i}'
+                metrics[class_name] = {
+                    'TP': int(tp[i]),
+                    'FP': int(fp[i]),
+                    'FN': int(fn[i]),
+                    'Precision': float(precision[i]),
+                    'Recall': float(recall[i]),
+                    'F1': float(f1[i])
+                }
+            
+            # Overall metrics
+            total_tp = tp.sum()
+            total_fp = fp.sum()
+            total_fn = fn.sum()
+            overall_precision = total_tp / (total_tp + total_fp + 1e-9)
+            overall_recall = total_tp / (total_tp + total_fn + 1e-9)
+            overall_f1 = 2 * overall_precision * overall_recall / (overall_precision + overall_recall + 1e-9)
+            
+            metrics['overall'] = {
+                'TP': int(total_tp),
+                'FP': int(total_fp),
+                'FN': int(total_fn),
+                'Precision': float(overall_precision),
+                'Recall': float(overall_recall),
+                'F1': float(overall_f1)
+            }
+            
+            return metrics
 #         b2_x1, b2_x2, b2_y1, b2_y2 = x2 - w2_, x2 + w2_, y2 - h2_, y2 + h2_
 #     else:  # x1, y1, x2, y2 = box1
 #         b1_x1, b1_y1, b1_x2, b1_y2 = box1.chunk(4, -1)
