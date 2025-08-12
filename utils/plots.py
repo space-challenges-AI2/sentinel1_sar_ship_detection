@@ -85,36 +85,48 @@ class Annotator:
 
     def box_label(self, box, label='', color=(128, 128, 128), txt_color=(255, 255, 255)):
         # Add one xyxy box to image with label
-        if self.pil or not is_ascii(label):
+        if self.pil or self.im is None:
             self.draw.rectangle(box, width=self.lw, outline=color)  # box
             if label:
-                w, h = self.font.getsize(label)  # text width, height (WARNING: deprecated) in 9.2.0
-                # _, _, w, h = self.font.getbbox(label)  # text width, height (New)
-                outside = box[1] - h >= 0  # label fits outside box
-                self.draw.rectangle(
-                    (box[0], box[1] - h if outside else box[1], box[0] + w + 1,
-                     box[1] + 1 if outside else box[1] + h + 1),
-                    fill=color,
-                )
-                # self.draw.text((box[0], box[1]), label, fill=txt_color, font=self.font, anchor='ls')  # for PIL>8.0
-                self.draw.text((box[0], box[1] - h if outside else box[1]), label, fill=txt_color, font=self.font)
+                # Fix for newer Pillow versions
+                try:
+                    # Try the new method first (Pillow 9.2.0+)
+                    bbox = self.font.getbbox(label)
+                    w, h = bbox[2] - bbox[0], bbox[3] - bbox[1]
+                except AttributeError:
+                    # Fallback to old method for older Pillow versions
+                    w, h = self.font.getsize(label)
+
+                # Outside
+                if box[1] - h >= 0:
+                    txt_background = self.draw.rectangle((box[0], box[1] - h, box[0] + w, box[1]), fill=color)
+                else:
+                    txt_background = self.draw.rectangle((box[0], box[1] + h, box[0] + w, box[1] + 2 * h), fill=color)
+                self.draw.text((box[0], box[1] - h if box[1] - h >= 0 else box[1] + h), label, fill=txt_color, font=self.font)
         else:  # cv2
             p1, p2 = (int(box[0]), int(box[1])), (int(box[2]), int(box[3]))
             cv2.rectangle(self.im, p1, p2, color, thickness=self.lw, lineType=cv2.LINE_AA)
             if label:
                 tf = max(self.lw - 1, 1)  # font thickness
-                w, h = cv2.getTextSize(label, 0, fontScale=self.lw / 3, thickness=tf)[0]  # text width, height
-                outside = p1[1] - h >= 3
-                p2 = p1[0] + w, p1[1] - h - 3 if outside else p1[1] + h + 3
-                cv2.rectangle(self.im, p1, p2, color, -1, cv2.LINE_AA)  # filled
-                cv2.putText(self.im,
-                            label, (p1[0], p1[1] - 2 if outside else p1[1] + h + 2),
-                            0,
-                            self.lw / 3,
-                            # self.lw,
-                            txt_color,
-                            thickness=tf,
-                            lineType=cv2.LINE_AA)
+                # For CV2 mode, we need to use cv2.putText instead of PIL font methods
+                # Calculate text size using cv2.getTextSize
+                font_scale = 0.6
+                font_thickness = 1
+                (text_width, text_height), baseline = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, font_scale, font_thickness)
+                
+                # Position text above the box
+                text_x = int(box[0])
+                text_y = int(box[1] - 10) if int(box[1] - 10) > text_height else int(box[1] + text_height + 10)
+                
+                # Draw text background rectangle
+                cv2.rectangle(self.im, 
+                            (text_x, text_y - text_height - baseline), 
+                            (text_x + text_width, text_y + baseline), 
+                            color, -1)
+                
+                # Draw text
+                cv2.putText(self.im, label, (text_x, text_y), 
+                        cv2.FONT_HERSHEY_SIMPLEX, font_scale, txt_color, font_thickness)
 
     def masks(self, masks, colors, im_gpu, alpha=0.5, retina_masks=False):
         """Plot masks at once.

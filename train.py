@@ -57,6 +57,7 @@ from utils.metrics import fitness
 from utils.plots import plot_evolve
 from utils.torch_utils import (EarlyStopping, ModelEMA, de_parallel, select_device, smart_DDP, smart_optimizer,
                                smart_resume, torch_distributed_zero_first)
+from utils.denoising.integration import prepare_denoise_params_from_args, log_denoising_config
 from models.common import BiFPN_Add3, BiFPN_Add2
 
 LOCAL_RANK = int(os.getenv('LOCAL_RANK', -1))  # https://pytorch.org/docs/stable/elastic/run.html
@@ -83,6 +84,24 @@ def train(hyp, opt, device, callbacks):  # hyp is path/to/hyp.yaml or hyp dictio
             hyp = yaml.safe_load(f)  # load hyps dict
     LOGGER.info(colorstr('hyperparameters: ') + ', '.join(f'{k}={v}' for k, v in hyp.items()))
     opt.hyp = hyp.copy()  # for saving hyps to checkpoints
+
+    # After loading hyperparameters
+    LOGGER.info(f"Loaded hyperparameters: {hyp}")
+    # Prepare denoising parameters from hyperparameters (not command line args)
+    denoise_params = {
+        'enabled': (opt.denoise > 0.0) or (hyp.get('denoise', 0.0) > 0.0),  # Enable if either is > 0
+        'method': opt.denoise_method if opt.denoise > 0.0 else hyp.get('denoise_method', 'fabf'),
+        'probability': opt.denoise if opt.denoise > 0.0 else hyp.get('denoise', 0.0),
+        'rho': opt.denoise_rho if opt.denoise > 0.0 else hyp.get('denoise_rho', 5.0),
+        'N': opt.denoise_N if opt.denoise > 0.0 else hyp.get('denoise_N', 5),
+        'sigma': opt.denoise_sigma if opt.denoise > 0.0 else hyp.get('denoise_sigma', 0.1),
+        'theta': opt.denoise_theta if opt.denoise > 0.0 else (None if hyp.get('denoise_theta') == 'null' else hyp.get('denoise_theta')),
+        'clip': opt.denoise_clip if opt.denoise > 0.0 else hyp.get('denoise_clip', True)
+    }
+
+    # Log the actual denoising parameters being used
+    LOGGER.info(f"Denoising parameters: {denoise_params}")
+    LOGGER.info(f"Denoising enabled: {denoise_params['enabled']} (probability: {denoise_params['probability']})")
 
     # Save run configuration to yaml file
     if not evolve:
@@ -186,6 +205,18 @@ def train(hyp, opt, device, callbacks):  # hyp is path/to/hyp.yaml or hyp dictio
         model = torch.nn.SyncBatchNorm.convert_sync_batchnorm(model).to(device)
         LOGGER.info('Using SyncBatchNorm()')
 
+    # Prepare denoising parameters
+    # denoise_params = {
+    #     'enabled': opt.denoise > 0.0,
+    #     'method': opt.denoise_method,
+    #     'probability': opt.denoise,
+    #     'rho': opt.denoise_rho,
+    #     'N': opt.denoise_N,
+    #     'sigma': opt.denoise_sigma,
+    #     'theta': opt.denoise_theta,
+    #     'clip': opt.denoise_clip
+    # }
+
     # Trainloader instantiation
     train_loader, dataset = create_dataloader(train_path,
                                               imgsz,
@@ -202,7 +233,8 @@ def train(hyp, opt, device, callbacks):  # hyp is path/to/hyp.yaml or hyp dictio
                                               quad=opt.quad,
                                               prefix=colorstr('train: '),
                                               shuffle=True,
-                                              seed=opt.seed)
+                                              seed=opt.seed,
+                                              denoise_params=denoise_params)
     # Concatenate labels
     labels = np.concatenate(dataset.labels, 0)
     mlc = int(labels[:, 0].max())  # max label class
@@ -482,6 +514,15 @@ def parse_opt(known=False):
     parser.add_argument('--save-period', type=int, default=-1, help='Save checkpoint every x epochs (disabled if < 1)')
     parser.add_argument('--seed', type=int, default=0, help='Global training seed')
     parser.add_argument('--local_rank', type=int, default=-1, help='Automatic DDP Multi-GPU argument, do not modify')
+    
+    # Denoising arguments
+    parser.add_argument('--denoise', type=float, default=0.0, help='probability of applying denoising (0.0 to 1.0)')
+    parser.add_argument('--denoise-method', type=str, default='fabf', help='denoising method: fabf or custom')
+    parser.add_argument('--denoise-rho', type=float, default=5.0, help='FABF spatial window radius')
+    parser.add_argument('--denoise-N', type=int, default=5, help='FABF polynomial order')
+    parser.add_argument('--denoise-sigma', type=float, default=0.1, help='FABF noise level')
+    parser.add_argument('--denoise-theta', type=float, default=None, help='FABF target intensity')
+    parser.add_argument('--denoise-clip', action='store_true', default=True, help='FABF clip output to [0, 1]')
 
     # Logger arguments
     parser.add_argument('--entity', default=None, help='Entity')

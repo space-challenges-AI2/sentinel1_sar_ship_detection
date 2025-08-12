@@ -131,7 +131,15 @@ def run(
         plots=True,
         callbacks=Callbacks(),
         compute_loss=None,
-):
+        # Add denoising parameters
+        denoise=0.0,
+        denoise_method='fabf',
+        denoise_rho=5.0,
+        denoise_N=5,
+        denoise_sigma=0.1,
+        denoise_theta=None,
+        denoise_clip=True
+    ):
     # Initialize/load model and set device
     training = model is not None
     if training:  # called by train.py
@@ -170,6 +178,21 @@ def run(
     iouv = torch.linspace(0.5, 0.95, 10, device=device)  # iou vector for mAP@0.5:0.95
     niou = iouv.numel()
 
+    # Prepare denoising parameters
+    denoise_params = {
+        'enabled': denoise > 0.0,
+        'probability': denoise,
+        'method': denoise_method,
+        'rho': denoise_rho,
+        'N': denoise_N,
+        'sigma': denoise_sigma,
+        'theta': denoise_theta,
+        'clip': denoise_clip
+    }
+
+    from utils.denoising.integration import log_denoising_config
+    log_denoising_config(denoise_params)
+
     # Dataloader
     if not training:
         if pt and not single_cls:  # check --weights are trained on --data
@@ -187,7 +210,8 @@ def run(
                                        pad=pad,
                                        rect=rect,
                                        workers=workers,
-                                       prefix=colorstr(f'{task}: '))[0]
+                                       prefix=colorstr(f'{task}: '),
+                                       denoise_params=denoise_params)[0]  # Add denoise_params
         print_memory_usage()  # Call memory monitoring function
 
     seen = 0
@@ -370,6 +394,16 @@ def parse_opt():
     parser.add_argument('--exist-ok', action='store_true', help='existing project/name ok, do not increment')
     parser.add_argument('--half', action='store_true', help='use FP16 half-precision inference')
     parser.add_argument('--dnn', action='store_true', help='use OpenCV DNN for ONNX inference')
+    
+    # Denoising arguments
+    parser.add_argument('--denoise', type=float, default=0.0, help='probability of applying denoising (0.0 to 1.0)')
+    parser.add_argument('--denoise-method', type=str, default='fabf', help='denoising method: fabf or custom')
+    parser.add_argument('--denoise-rho', type=float, default=5.0, help='FABF spatial window radius')
+    parser.add_argument('--denoise-N', type=int, default=5, help='FABF polynomial order')
+    parser.add_argument('--denoise-sigma', type=float, default=0.1, help='FABF noise level')
+    parser.add_argument('--denoise-theta', type=float, default=None, help='FABF target intensity')
+    parser.add_argument('--denoise-clip', action='store_true', default=True, help='FABF clip output to [0, 1]')
+    
     opt = parser.parse_args()
     opt.data = check_yaml(opt.data)  # check YAML
     opt.save_json |= opt.data.endswith('coco.yaml')
