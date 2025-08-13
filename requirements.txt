@@ -50,3 +50,9 @@ wheel>=0.38.0 # Snyk vulnerability fix
 # pycocotools>=2.0.6  # COCO mAP
 # roboflow
 # ultralytics  # HUB https://hub.ultralytics.com
+
+# Pipeline ---------------------------------------------------------------------
+watchdog>=3.0.0  # File system monitoring for ingest service
+
+# Health Monitoring ------------------------------------------------------------
+GPUtil>=1.4.0  # GPU monitoring and utilization
