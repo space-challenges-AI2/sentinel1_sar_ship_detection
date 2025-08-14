@@ -216,7 +216,21 @@ class PipelineCoordinator:
                 # Step 2: Georeference detections
                 geo_result = self._georeference_detections(work_item['file_path'])
                 
-                if geo_result and geo_result['status'] == 'success':
+                # Handle case where no detections were found
+                if geo_result is None:
+                    # No detections found, but still mark as processed
+                    processing_time = time.time() - start_time
+                    self.stats['images_processed'] += 1
+                    self.stats['processing_time_total'] += processing_time
+                    self.stats['last_processed'] = time.time()
+                    
+                    self.logger.info(f"Pipeline completed for {work_item['file_path']} (no detections) in {processing_time:.2f}s")
+                    
+                    # Mark work item as complete
+                    self.ingest_service.mark_work_complete(work_item)
+                    return True
+                
+                if geo_result['status'] == 'success':
                     # Step 3: Post-process and generate thumbnails
                     postproc_result = self._post_process_detections()
                     
@@ -228,8 +242,8 @@ class PipelineCoordinator:
                             # Update statistics
                             processing_time = time.time() - start_time
                             self.stats['images_processed'] += 1
-                            self.stats['total_detections'] += geo_result.get('detections_count', 0)  # Use total_detections
-                            self.stats['detections_found'] += geo_result.get('detections_count', 0)  # Keep for backward compatibility
+                            self.stats['total_detections'] += geo_result.get('detections_count', 0)
+                            self.stats['detections_found'] += geo_result.get('detections_count', 0)
                             self.stats['thumbnails_generated'] += postproc_result.get('thumbnails_count', 0)
                             self.stats['packets_created'] += packet_result.get('packets_created', 0)
                             self.stats['processing_time_total'] += processing_time
@@ -398,8 +412,16 @@ class PipelineCoordinator:
         
         try:
             while self.running:
+                # Debug: Check work queue status
+                ingest_status = self.ingest_service.get_status()
+                queue_length = ingest_status.get('queue_length', 0)
+                self.logger.info(f"Work queue length: {queue_length}")
+                
                 # Run one pipeline cycle
-                self.run_pipeline_cycle()
+                cycle_result = self.run_pipeline_cycle()
+                
+                if not cycle_result:
+                    self.logger.info("Pipeline cycle returned False - no work or processing failed")
                 
                 # Wait for next cycle
                 time.sleep(cycle_interval)
@@ -408,8 +430,8 @@ class PipelineCoordinator:
             self.logger.info("Received interrupt signal, stopping pipeline")
         except Exception as e:
             self.logger.error(f"Pipeline error: {e}")
-        finally:
-            self.stop()
+            # Don't stop the pipeline on errors, just log them and continue
+            time.sleep(cycle_interval)
     
     def get_status(self) -> Dict[str, Any]:
         """Get current status of the pipeline coordinator."""
