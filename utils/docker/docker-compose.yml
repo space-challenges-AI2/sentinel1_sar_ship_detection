@@ -1,0 +1,39 @@
+version: '3.8'
+
+services:
+  sar-ship-detection:
+    build:
+      context: ../..
+      dockerfile: utils/docker/Dockerfile-laptop
+    container_name: sar-ship-detection
+    volumes:
+      # Mount your data directories
+      - ../../data:/workspace/data:ro
+      - ../../weights:/workspace/weights:ro
+      - ../../configs:/workspace/configs:ro
+      # Mount test directories for persistence
+      - ../../test_ingest:/workspace/test_ingest
+      - ../../test_work:/workspace/test_work
+      - ../../test_detections:/workspace/test_detections
+      - ../../test_thumbs:/workspace/test_thumbs
+      - ../../test_outbox:/workspace/test_outbox
+      - ../../test_logs:/workspace/test_logs
+      - ../../test_georeferenced:/workspace/test_georeferenced
+      - ../../test_postprocessed:/workspace/test_postprocessed
+      - ../../test_denoising:/workspace/test_denoising
+      - ../../test_results:/workspace/test_results
+    environment:
+      - PYTHONPATH=/workspace
+      - CUDA_VISIBLE_DEVICES=0
+    ports:
+      - "6006:6006"  # TensorBoard
+    stdin_open: true
+    tty: true
+    runtime: nvidia
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]

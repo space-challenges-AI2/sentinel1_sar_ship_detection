@@ -6,7 +6,3 @@ test: images/val
 # Classes
 nc: 1
 names: ['ship']
-
-
-
-
