@@ -38,6 +38,13 @@ cache/
 
 results*.csv
 
+# Test directories and demo outputs
+test_*/
+demo_test/
+demo_*/
+pipeline_test/
+pipeline_demo/
+
 # Datasets -------------------------------------------------------------------------------------------------------------
 coco/
 coco128/

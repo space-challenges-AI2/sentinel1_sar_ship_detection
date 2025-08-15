@@ -272,6 +272,9 @@ class LoadImages:
         self.transforms = transforms  # optional
         self.vid_stride = vid_stride  # video frame-rate stride
         self.denoise_params = denoise_params or {}
+        
+        # Initialize denoising counter
+        self.denoise_counter = 0
 
         if any(videos):
             self._new_video(videos[0])  # new video
@@ -282,6 +285,8 @@ class LoadImages:
 
     def __iter__(self):
         self.count = 0
+        # Reset denoise counter for new iteration
+        self.denoise_counter = 0
         return self
 
     def __next__(self):

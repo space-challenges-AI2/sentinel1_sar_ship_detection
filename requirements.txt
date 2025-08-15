@@ -5,7 +5,7 @@
 gitpython
 ipython  # interactive notebook
 matplotlib>=3.2.2
-numpy>=1.18.5
+numpy<2.0  # Pin to NumPy 1.x for PyTorch compatibility
 opencv-python>=4.1.1
 Pillow>=7.1.2
 psutil  # system resources
@@ -17,6 +17,7 @@ torch>=1.7.0  # see https://pytorch.org/get-started/locally (recommended)
 torchvision>=0.8.1
 einops
 tqdm>=4.64.0
+timm  # vision models and utilities
 # protobuf<=3.20.1  # https://github.com/ultralytics/yolov5/issues/8012
 
 # Logging ---------------------------------------------------------------------
@@ -50,3 +51,9 @@ wheel>=0.38.0 # Snyk vulnerability fix
 # pycocotools>=2.0.6  # COCO mAP
 # roboflow
 # ultralytics  # HUB https://hub.ultralytics.com
+
+# Pipeline ---------------------------------------------------------------------
+watchdog>=3.0.0  # File system monitoring for ingest service
+
+# Health Monitoring ------------------------------------------------------------
+GPUtil>=1.4.0  # GPU monitoring and utilization

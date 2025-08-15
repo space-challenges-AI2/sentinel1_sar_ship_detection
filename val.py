@@ -310,6 +310,48 @@ def run(
         mp, mr, map50, map = p.mean(), r.mean(), ap50.mean(), ap.mean()
     nt = np.bincount(stats[3].astype(int), minlength=nc)  # number of targets per class
 
+    # Enhanced metrics reporting for land model
+    if plots and hasattr(confusion_matrix, 'get_detailed_metrics'):
+        detailed_metrics = confusion_matrix.get_detailed_metrics(names)
+        
+        # Log detailed metrics
+        LOGGER.info('\n' + '='*60)
+        LOGGER.info('DETAILED METRICS FOR LAND MODEL VALIDATION')
+        LOGGER.info('='*60)
+        
+        # Log per-class metrics
+        for class_name, metrics in detailed_metrics.items():
+            if class_name != 'overall':
+                LOGGER.info(f'\n{class_name.upper()}:')
+                LOGGER.info(f'  True Positives (TP): {metrics["TP"]}')
+                LOGGER.info(f'  False Positives (FP): {metrics["FP"]}')
+                LOGGER.info(f'  False Negatives (FN): {metrics["FN"]}')
+                LOGGER.info(f'  Precision: {metrics["Precision"]:.4f}')
+                LOGGER.info(f'  Recall: {metrics["Recall"]:.4f}')
+                LOGGER.info(f'  F1-Score: {metrics["F1"]:.4f}')
+        
+        # Log overall metrics
+        overall = detailed_metrics['overall']
+        LOGGER.info(f'\nOVERALL METRICS:')
+        LOGGER.info(f'  Total TP: {overall["TP"]}')
+        LOGGER.info(f'  Total FP: {overall["FP"]}')
+        LOGGER.info(f'  Total FN: {overall["FN"]}')
+        LOGGER.info(f'  Overall Precision: {overall["Precision"]:.4f}')
+        LOGGER.info(f'  Overall Recall: {overall["Recall"]:.4f}')
+        LOGGER.info(f'  Overall F1-Score: {overall["F1"]:.4f}')
+        
+        # Save detailed metrics to file
+        metrics_file = save_dir / 'detailed_metrics.json'
+        try:
+            import json
+            with open(metrics_file, 'w') as f:
+                json.dump(detailed_metrics, f, indent=2)
+            LOGGER.info(f'\nDetailed metrics saved to: {metrics_file}')
+        except Exception as e:
+            LOGGER.warning(f'Could not save detailed metrics: {e}')
+        
+        LOGGER.info('='*60)
+
     # Print results
     pf = '%22s' + '%11i' * 2 + '%11.3g' * 4  # print format
     LOGGER.info(pf % ('all', seen, nt.sum(), mp, mr, map50, map))
