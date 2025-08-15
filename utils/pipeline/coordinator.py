@@ -43,9 +43,14 @@ class PipelineCoordinator:
         # Load configuration
         self.config = PipelineConfig(config_file)
         
-        # Get pipeline directory (where this script is located)
-        # Change from Path(__file__).parent to current working directory
-        self.pipeline_dir = Path.cwd()
+        # Get pipeline directory - use absolute path to /workspace in Docker
+        # In Docker, the working directory should be /workspace
+        if os.path.exists("/workspace"):
+            # We're in Docker, use /workspace
+            self.pipeline_dir = Path("/workspace")
+        else:
+            # We're running locally, use current working directory
+            self.pipeline_dir = Path.cwd()
         
         # Use config values with fallbacks, ensuring paths are relative to pipeline directory
         self.ingest_dir = Path(kwargs.get('ingest_dir', 
@@ -277,6 +282,15 @@ class PipelineCoordinator:
             # Clean up the denoising method - remove any comments or extra text
             clean_denoise_method = self.denoise_method.split('#')[0].strip() if '#' in self.denoise_method else self.denoise_method
             
+            # Auto-detect device - use CPU if CUDA not available
+            import torch
+            if torch.cuda.is_available() and torch.cuda.device_count() > 0:
+                device = "0"  # Use first CUDA device
+                self.logger.info("CUDA available, using GPU for detection")
+            else:
+                device = "cpu"  # Fallback to CPU
+                self.logger.info("CUDA not available, using CPU for detection")
+            
             # Build detect.py command with denoising
             cmd = [
                 "python", "detect.py",
@@ -285,28 +299,42 @@ class PipelineCoordinator:
                 "--project", str(self.detections_dir),
                 "--name", "pipeline",
                 "--exist-ok",
+                "--device", device,  # ← THIS WAS MISSING!
                 "--denoise", str(self.denoise_probability),
-                "--denoise-method", clean_denoise_method,  # Use cleaned method
+                "--denoise-method", clean_denoise_method,
                 "--denoise-rho", "5.0",
                 "--denoise-N", "5",
                 "--denoise-sigma", "0.1",
-                "--save-txt",  # Save text results for georeferencing
-                "--save-conf"   # Save confidence scores
+                "--save-txt",
+                "--save-conf"
             ]
             
             self.logger.debug(f"Running detection: {' '.join(cmd)}")
             self.logger.info(f"Using denoising method: '{clean_denoise_method}'")
+            self.logger.info(f"Using device: {device}")
+            self.logger.info(f"Denoising probability: {self.denoise_probability}")
+            self.logger.info(f"Working directory: {self.pipeline_dir}")
             
-            # Execute detect.py
+            # Execute detect.py with fixed working directory
             result = subprocess.run(
                 cmd,
                 capture_output=True,
                 text=True,
-                cwd=Path.cwd()
+                cwd=self.pipeline_dir
             )
             
             if result.returncode == 0:
                 self.logger.info(f"Detection completed for {image_path}")
+                # Verify that results were actually created
+                detection_dir = self.detections_dir / "pipeline"
+                if detection_dir.exists():
+                    files_created = list(detection_dir.rglob("*"))
+                    self.logger.info(f"Files created in detection directory: {len(files_created)}")
+                    for file in files_created[:5]:  # Show first 5 files
+                        self.logger.info(f"  - {file}")
+                else:
+                    self.logger.warning("Detection directory not created!")
+                
                 return {
                     'status': 'success',
                     'image_path': image_path,

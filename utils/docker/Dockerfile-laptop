@@ -46,12 +46,17 @@ RUN apt-get update && apt-get install -y \
 # Create working directory
 WORKDIR /workspace
 
-# Copy requirements first for better caching
-COPY requirements.txt .
-
-# Install Python dependencies
+# Force NumPy to 1.x version BEFORE copying requirements
 RUN pip install --no-cache-dir --upgrade pip setuptools wheel
-RUN pip install --no-cache-dir -r requirements.txt
+RUN pip uninstall -y numpy || true
+RUN pip install --no-cache-dir "numpy==1.24.3"
+
+# Copy requirements and force reinstall with pinned NumPy
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt --force-reinstall
+
+# Force NumPy version again after requirements install
+RUN pip install --no-cache-dir "numpy==1.24.3" --force-reinstall
 
 # Install additional packages needed for the pipeline
 RUN pip install --no-cache-dir \
@@ -81,6 +86,11 @@ RUN mkdir -p \
     test_denoising \
     test_results
 
+# Verify NumPy version and model weights
+RUN python -c "import numpy; print(f'NumPy version: {numpy.__version__}')"
+RUN ls -la runs/train/experiment3/weights/ || echo "Model weights directory not found"
+RUN ls -la weights/ || echo "Weights directory not found"
+
 # Set permissions
 RUN chmod +x demo.py
 RUN chmod +x denoise_hrsid_val.py
@@ -96,11 +106,13 @@ echo "Available commands:"\n\
 echo "  python demo.py                    - Run the full demo"\n\
 echo "  python denoise_hrsid_val.py       - Run denoising on HRSID dataset"\n\
 echo "  python detect.py                   - Run detection on images"\n\
+echo "  python detect.py --source test_ingest/ --weights runs/train/experiment3/weights/best.pt --device 0  - Test detection with GPU"\n\
 echo "  python train.py                    - Train a model"\n\
 echo "  python val.py                      - Validate a model"\n\
 echo "  bash                               - Get a shell"\n\
 echo ""\n\
 echo "To run the demo, use: python demo.py"\n\
+echo "To test detection directly, use: python detect.py --source test_ingest/ --weights runs/train/experiment3/weights/best.pt --device 0"\n\
 echo "To get a shell, use: bash"\n\
 echo ""\n\
 exec "$@"' > /workspace/entrypoint.sh
