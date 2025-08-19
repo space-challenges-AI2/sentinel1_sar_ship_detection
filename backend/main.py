@@ -48,7 +48,7 @@ def image_to_base64(img_np: np.ndarray) -> str:
 
 # --- 1. Model Loading and Configuration ---
 YOLO5_REPO_PATH = 'yolov5'
-MODEL_PATH = 'weights/best.pt'
+MODEL_PATH = 'best.pt'
 
 print("Loading YOLOv5 model...")
 model = torch.hub.load(YOLO5_REPO_PATH, 'custom', path=MODEL_PATH, source='local')
