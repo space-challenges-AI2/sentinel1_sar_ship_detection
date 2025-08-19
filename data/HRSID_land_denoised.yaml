@@ -1,4 +1,4 @@
-path: ./data/HRSID_land_main # dataset root dir
+path: ./data/HRSID_land_denoised # dataset root dir
 train: images/train  # train images (relative to 'path') 118287 images
 val: images/val  # val images (relative to 'path') 5000 images
 test: images/val

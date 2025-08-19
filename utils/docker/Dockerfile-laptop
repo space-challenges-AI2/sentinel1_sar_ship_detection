@@ -1,0 +1,109 @@
+# SAR Ship Detection Pipeline - Laptop Dockerfile
+# Optimized for x86_64 systems to run the full demo
+# Author: @amanarora9848
+
+# Start FROM NVIDIA PyTorch image for CUDA support
+FROM pytorch/pytorch:2.1.0-cuda12.1-cudnn8-runtime
+
+# Set environment variables
+ENV DEBIAN_FRONTEND=noninteractive
+ENV PYTHONUNBUFFERED=1
+ENV PYTHONDONTWRITEBYTECODE=1
+ENV OMP_NUM_THREADS=1
+
+# Install system dependencies
+RUN apt-get update && apt-get install -y \
+    git \
+    curl \
+    wget \
+    unzip \
+    software-properties-common \
+    apt-transport-https \
+    ca-certificates \
+    gnupg \
+    lsb-release \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install additional system packages for OpenCV and other dependencies
+RUN apt-get update && apt-get install -y \
+    libgl1-mesa-glx \
+    libglib2.0-0 \
+    libsm6 \
+    libxext6 \
+    libxrender-dev \
+    libgomp1 \
+    libgcc-s1 \
+    libstdc++6 \
+    libgfortran5 \
+    libquadmath0 \
+    libgomp1 \
+    libblas3 \
+    liblapack3 \
+    libatlas-base-dev \
+    gfortran \
+    && rm -rf /var/lib/apt/lists/*
+
+# Create working directory
+WORKDIR /workspace
+
+# Force NumPy to 1.x version BEFORE copying requirements
+RUN pip install --no-cache-dir --upgrade pip setuptools wheel
+RUN pip uninstall -y numpy || true
+RUN pip install --no-cache-dir "numpy==1.24.3"
+
+# Copy requirements and force reinstall with pinned NumPy
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt --force-reinstall
+
+# Force NumPy version again after requirements install
+RUN pip install --no-cache-dir "numpy==1.24.3" --force-reinstall
+
+# Install additional packages needed for the pipeline
+RUN pip install --no-cache-dir \
+    rich \
+    watchdog \
+    GPUtil \
+    opencv-python-headless \
+    albumentations \
+    pycocotools \
+    roboflow \
+    ultralytics
+
+# Copy the entire project
+COPY . /workspace/
+
+# Create necessary directories for the pipeline
+RUN mkdir -p \
+    test_ingest \
+    test_work \
+    test_metadata \
+    test_detections \
+    test_thumbs \
+    test_outbox \
+    test_logs \
+    test_georeferenced \
+    test_postprocessed \
+    test_denoising \
+    test_results
+
+# Verify NumPy version and model weights
+RUN python -c "import numpy; print(f'NumPy version: {numpy.__version__}')"
+RUN ls -la runs/train/experiment3/weights/ || echo "Model weights directory not found"
+RUN ls -la weights/ || echo "Weights directory not found"
+
+# Set permissions
+RUN chmod +x demo.py
+RUN chmod +x denoise_hrsid.py
+RUN chmod +x detect.py
+RUN chmod +x train.py
+RUN chmod +x val.py
+
+# Copy the entrypoint script
+COPY utils/docker/entrypoint.sh /workspace/entrypoint.sh
+RUN chmod +x /workspace/entrypoint.sh
+
+# Set the entrypoint
+ENTRYPOINT ["/workspace/entrypoint.sh"]
+
+# Default command
+CMD ["python", "demo.py"]

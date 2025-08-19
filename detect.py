@@ -57,10 +57,10 @@ def run(
         source=ROOT / 'data/images',  # file/dir/URL/glob/screen/0 (webcam)
         data=ROOT / 'data/coco128.yaml',  # path to dataset.yaml
         imgsz=(640, 640),  # inference image size (height, width)
-        conf_thres=0.50,  # confidence threshold # TODO prev 0.25
+        conf_thres=0.40,  # confidence threshold # TODO prev 0.25
         iou_thres=0.45,  # NMS IoU threshold
         max_det=1000,  # maximum detections per image
-        device='',  # CUDA device, e.g. 0 or 0,1,2,3 or cpu
+        device=0, # '',  # CUDA device, e.g. 0 or 0,1,2,3 or cpu
         view_img=False,  # show results
         save_txt=False,  # save results to *.txt
         save_conf=False,  # save confidences in --save-txt labels
