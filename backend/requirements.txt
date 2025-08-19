@@ -7,3 +7,5 @@ opencv-python-headless
 Pillow
 python-multipart
 ultralytics
+matplotlib
+seaborn
