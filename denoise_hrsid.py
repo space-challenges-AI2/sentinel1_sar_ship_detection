@@ -307,6 +307,206 @@ def denoise_full_dataset(input_dataset_dir, output_dataset_dir, rho=3.0, N=1, si
         'val_successful': val_results[1]
     }
 
+def denoise_dataset_flexible(input_dataset_dir, output_dataset_dir, rho=3.0, N=1, sigma=0.115, theta=None, clip=True):
+    """
+    Denoise dataset with flexible structure detection
+    
+    Args:
+        input_dataset_dir: Input dataset directory
+        output_dataset_dir: Output dataset directory for denoised images
+        rho: Spatial window radius
+        N: Polynomial order
+        sigma: Noise level
+        theta: Target intensity
+        clip: Whether to clip output
+    
+    Returns:
+        dict: Summary of processing results
+    """
+    input_path = Path(input_dataset_dir)
+    output_path = Path(output_dataset_dir)
+    
+    if not input_path.exists():
+        raise FileNotFoundError(f"Input dataset directory '{input_dataset_dir}' does not exist")
+    
+    # Detect dataset structure
+    dataset_structure = detect_dataset_structure(input_path)
+    print(f"Detected dataset structure: {dataset_structure['type']}")
+    
+    # Create output directory structure
+    output_path.mkdir(parents=True, exist_ok=True)
+    
+    if dataset_structure['type'] == 'standard_hrsid':
+        # Standard HRSID structure with train/val splits
+        return denoise_full_dataset(input_path, output_path, rho, N, sigma, theta, clip)
+    
+    elif dataset_structure['type'] == 'flat_images':
+        # Flat structure with images directly in dataset root
+        return denoise_flat_dataset(input_path, output_path, rho, N, sigma, theta, clip)
+    
+    elif dataset_structure['type'] == 'mixed':
+        # Mixed structure - handle both cases
+        return denoise_mixed_dataset(input_path, output_path, rho, N, sigma, theta, clip)
+    
+    else:
+        raise ValueError(f"Unknown dataset structure: {dataset_structure}")
+
+def detect_dataset_structure(dataset_path):
+    """
+    Detect the structure of the dataset
+    
+    Returns:
+        dict: Structure information
+    """
+    # Check for standard HRSID structure
+    train_images_dir = dataset_path / "images" / "train"
+    val_images_dir = dataset_path / "images" / "val"
+    
+    # Check for flat structure (images directly in dataset)
+    flat_images = list(dataset_path.glob("*.jpg")) + list(dataset_path.glob("*.jpeg")) + list(dataset_path.glob("*.png"))
+    
+    # Check for subdirectories with images
+    subdir_images = []
+    for subdir in dataset_path.iterdir():
+        if subdir.is_dir():
+            subdir_images.extend(list(subdir.glob("*.jpg")) + list(subdir.glob("*.jpeg")) + list(subdir.glob("*.png")))
+    
+    if train_images_dir.exists() and val_images_dir.exists():
+        return {
+            'type': 'standard_hrsid',
+            'train_images': len(list(train_images_dir.glob("*.jpg"))),
+            'val_images': len(list(val_images_dir.glob("*.jpg")))
+        }
+    elif len(flat_images) > 0:
+        return {
+            'type': 'flat_images',
+            'total_images': len(flat_images),
+            'image_files': flat_images
+        }
+    elif len(subdir_images) > 0:
+        return {
+            'type': 'mixed',
+            'subdir_images': subdir_images,
+            'subdirs': [d for d in dataset_path.iterdir() if d.is_dir()]
+        }
+    else:
+        return {
+            'type': 'unknown',
+            'message': 'No recognizable dataset structure found'
+        }
+
+def denoise_flat_dataset(input_path, output_path, rho, N, sigma, theta, clip):
+    """
+    Denoise dataset with flat structure (images directly in dataset root)
+    """
+    # Find all image files
+    image_extensions = {'.jpg', '.jpeg', '.png', '.tif', '.tiff', '.bmp'}
+    image_files = [
+        f for f in input_path.iterdir() 
+        if f.is_file() and f.suffix.lower() in image_extensions
+    ]
+    
+    if not image_files:
+        print(f"No image files found in {input_path}")
+        return {'total_images': 0, 'successful': 0, 'failed': 0, 'labels_copied': 0}
+    
+    print(f"\nProcessing flat dataset:")
+    print(f"  Input: {input_path}")
+    print(f"  Output: {output_path}")
+    print(f"  Images found: {len(image_files)}")
+    
+    # Create output directory
+    output_path.mkdir(parents=True, exist_ok=True)
+    
+    # Process images with progress bar
+    successful = 0
+    failed = 0
+    
+    for img_file in tqdm(image_files, desc="Denoising images"):
+        # Create output path
+        output_file = output_path / img_file.name
+        
+        # Denoise image
+        if denoise_image(img_file, output_file, rho, N, sigma, theta, clip):
+            successful += 1
+        else:
+            failed += 1
+    
+    # Copy labels if they exist in the same directory
+    labels_copied = 0
+    label_files = list(input_path.glob("*.txt"))
+    if label_files:
+        for label_file in label_files:
+            shutil.copy2(label_file, output_path / label_file.name)
+        labels_copied = len(label_files)
+        print(f"Copied {labels_copied} label files")
+    
+    # Copy any YAML config files
+    yaml_files = list(input_path.glob("*.yaml"))
+    for yaml_file in yaml_files:
+        shutil.copy2(yaml_file, output_path / yaml_file.name)
+        print(f"Copied dataset config: {yaml_file.name}")
+    
+    return {
+        'total_images': len(image_files),
+        'successful': successful,
+        'failed': failed,
+        'labels_copied': labels_copied
+    }
+
+def denoise_mixed_dataset(input_path, output_path, rho, N, sigma, theta, clip):
+    """
+    Denoise dataset with mixed structure (images in subdirectories)
+    """
+    # Find all images in subdirectories
+    all_images = []
+    for subdir in input_path.iterdir():
+        if subdir.is_dir():
+            subdir_images = list(subdir.glob("*.jpg")) + list(subdir.glob("*.jpeg")) + list(subdir.glob("*.png"))
+            all_images.extend([(subdir, img) for img in subdir_images])
+    
+    if not all_images:
+        print(f"No image files found in subdirectories of {input_path}")
+        return {'total_images': 0, 'successful': 0, 'failed': 0, 'labels_copied': 0}
+    
+    print(f"\nProcessing mixed dataset:")
+    print(f"  Input: {input_path}")
+    print(f"  Output: {output_path}")
+    print(f"  Images found: {len(all_images)}")
+    
+    # Create output directory structure
+    output_path.mkdir(parents=True, exist_ok=True)
+    
+    # Process images with progress bar
+    successful = 0
+    failed = 0
+    
+    for subdir, img_file in tqdm(all_images, desc="Denoising images"):
+        # Create output subdirectory
+        output_subdir = output_path / subdir.name
+        output_subdir.mkdir(exist_ok=True)
+        
+        # Create output path
+        output_file = output_subdir / img_file.name
+        
+        # Denoise image
+        if denoise_image(img_file, output_file, rho, N, sigma, theta, clip):
+            successful += 1
+        else:
+            failed += 1
+        
+        # Copy labels if they exist
+        label_file = subdir / f"{img_file.stem}.txt"
+        if label_file.exists():
+            shutil.copy2(label_file, output_subdir / label_file.name)
+    
+    return {
+        'total_images': len(all_images),
+        'successful': successful,
+        'failed': failed,
+        'labels_copied': 0  # Labels are copied per image
+    }
+
 def main():
     parser = argparse.ArgumentParser(description="Denoise HRSID land dataset")
     parser.add_argument("--input", "-i", 
@@ -315,6 +515,10 @@ def main():
     parser.add_argument("--output", "-o", 
                        default="data/HRSID_land_denoised",
                        help="Output dataset directory for denoised images (default: data/HRSID_land_denoised)")
+    parser.add_argument("--single-image", "-s",
+                       help="Denoise a single image instead of full dataset (provide image path)")
+    parser.add_argument("--single-output", "-so",
+                       help="Output path for single image denoising (required with --single-image)")
     parser.add_argument("--hyp", 
                        default="data/hyp/hyp.scratch-low.yaml",
                        help="Hyperparameter file path (default: data/hyp/hyp.scratch-low.yaml)")
@@ -346,7 +550,53 @@ def main():
     if args.no_clip:
         denoise_params['clip'] = False
     
-    # Validate input directory
+    # Handle single image denoising
+    if args.single_image:
+        if not args.single_output:
+            print("Error: --single-output is required when using --single-image")
+            return 1
+        
+        input_image = Path(args.single_image)
+        output_image = Path(args.single_output)
+        
+        if not input_image.exists():
+            print(f"Error: Input image '{args.single_image}' does not exist")
+            return 1
+        
+        print("=" * 80)
+        print("Single Image Denoising")
+        print("=" * 80)
+        print(f"Input image: {args.single_image}")
+        print(f"Output image: {args.single_output}")
+        print(f"Denoising parameters: rho={denoise_params['rho']}, N={denoise_params['N']}, sigma={denoise_params['sigma']}")
+        print("=" * 80)
+        
+        # Create output directory if it doesn't exist
+        output_image.parent.mkdir(parents=True, exist_ok=True)
+        
+        # Denoise single image
+        start_time = time.time()
+        success = denoise_image(
+            image_path=input_image,
+            output_path=output_image,
+            rho=denoise_params['rho'],
+            N=denoise_params['N'],
+            sigma=denoise_params['sigma'],
+            theta=denoise_params['theta'],
+            clip=denoise_params['clip']
+        )
+        
+        if success:
+            elapsed_time = time.time() - start_time
+            print(f"\n✅ Successfully denoised image in {elapsed_time:.2f} seconds")
+            print(f"Output saved to: {args.single_output}")
+        else:
+            print("\n❌ Failed to denoise image")
+            return 1
+        
+        return 0
+    
+    # Validate input directory for full dataset processing
     if not Path(args.input).exists():
         print(f"Error: Input dataset directory '{args.input}' does not exist")
         return 1
@@ -355,8 +605,8 @@ def main():
     start_time = time.time()
     
     try:
-        # Denoise full dataset
-        results = denoise_full_dataset(
+        # Use flexible dataset denoising
+        results = denoise_dataset_flexible(
             args.input, 
             args.output,
             rho=denoise_params['rho'],

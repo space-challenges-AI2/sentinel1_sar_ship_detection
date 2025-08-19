@@ -93,30 +93,13 @@ RUN ls -la weights/ || echo "Weights directory not found"
 
 # Set permissions
 RUN chmod +x demo.py
-RUN chmod +x denoise_hrsid_val.py
+RUN chmod +x denoise_hrsid.py
 RUN chmod +x detect.py
 RUN chmod +x train.py
 RUN chmod +x val.py
 
-# Create a startup script
-RUN echo '#!/bin/bash\n\
-echo "SAR Ship Detection Pipeline - Docker Container"\n\
-echo "============================================="\n\
-echo "Available commands:"\n\
-echo "  python demo.py                    - Run the full demo"\n\
-echo "  python denoise_hrsid_val.py       - Run denoising on HRSID dataset"\n\
-echo "  python detect.py                   - Run detection on images"\n\
-echo "  python detect.py --source test_ingest/ --weights runs/train/experiment3/weights/best.pt --device 0  - Test detection with GPU"\n\
-echo "  python train.py                    - Train a model"\n\
-echo "  python val.py                      - Validate a model"\n\
-echo "  bash                               - Get a shell"\n\
-echo ""\n\
-echo "To run the demo, use: python demo.py"\n\
-echo "To test detection directly, use: python detect.py --source test_ingest/ --weights runs/train/experiment3/weights/best.pt --device 0"\n\
-echo "To get a shell, use: bash"\n\
-echo ""\n\
-exec "$@"' > /workspace/entrypoint.sh
-
+# Copy the entrypoint script
+COPY utils/docker/entrypoint.sh /workspace/entrypoint.sh
 RUN chmod +x /workspace/entrypoint.sh
 
 # Set the entrypoint

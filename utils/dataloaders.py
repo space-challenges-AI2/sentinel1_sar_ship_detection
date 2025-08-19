@@ -30,6 +30,7 @@ from tqdm import tqdm
 
 from utils.augmentations import (Albumentations, augment_hsv, classify_albumentations, classify_transforms, copy_paste,
                                  letterbox, mixup, random_perspective)
+from utils.sar_augmentations import apply_sar_augmentations
 from utils.general import (DATASETS_DIR, LOGGER, NUM_THREADS, TQDM_BAR_FORMAT, check_dataset, check_requirements,
                            check_yaml, clean_str, cv2, is_colab, is_kaggle, segments2boxes, unzip_file, xyn2xy,
                            xywh2xyxy, xywhn2xyxy, xyxy2xywhn)
@@ -774,9 +775,9 @@ class LoadImagesAndLabels(Dataset):
                 if nl:
                     labels[:, 1] = 1 - labels[:, 1]
 
-            # Cutouts
-            # labels = cutout(img, labels, p=0.5)
-            # nl = len(labels)  # update after cutout
+            # SAR-specific augmentations
+            img, labels = apply_sar_augmentations(img, labels, hyp)
+            nl = len(labels)  # update after SAR augmentations
 
         labels_out = torch.zeros((nl, 6))
         if nl:

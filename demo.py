@@ -90,6 +90,8 @@ def run_demo():
         coordinator = PipelineCoordinator()
         coordinator.denoise_method = denoise_method
         coordinator.denoise_probability = denoise_probability
+        # Override the weights path to use experiment4
+        coordinator.weights_path = Path("runs/train/experiment4/weights/best.pt")
     
     console.print("[green] Pipeline initialized successfully![/green]")
     
