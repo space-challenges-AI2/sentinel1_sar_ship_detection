@@ -52,8 +52,8 @@ MODEL_PATH = 'best.pt'
 
 print("Loading YOLOv5 model...")
 model = torch.hub.load(YOLO5_REPO_PATH, 'custom', path=MODEL_PATH, source='local')
-model.conf = 0.25
-model.iou = 0.45
+model.conf = 0.45
+model.iou = 0.1
 
 if torch.cuda.is_available():
     model.to('cuda')
