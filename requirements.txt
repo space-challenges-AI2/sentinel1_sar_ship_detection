@@ -57,3 +57,6 @@ watchdog>=3.0.0  # File system monitoring for ingest service
 
 # Health Monitoring ------------------------------------------------------------
 GPUtil>=1.4.0  # GPU monitoring and utilization
+
+# Jetson Compatibility ------------------------------------------------------------
+opencv-python-headless>=4.5.0  # Headless OpenCV for Jetson

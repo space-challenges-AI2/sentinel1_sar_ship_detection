@@ -1,0 +1,119 @@
+# SAR Ship Detection Pipeline - Jetson AGX Orin Dockerfile
+# Optimized for ARM64 architecture and Jetson performance
+# Author: @amanarora9848
+
+# Use NVIDIA's official Jetson PyTorch image
+FROM nvcr.io/nvidia/l4t-pytorch:r35.2.1-pth2.0-py3
+
+# Set environment variables
+ENV DEBIAN_FRONTEND=noninteractive
+ENV PYTHONUNBUFFERED=1
+ENV PYTHONDONTWRITEBYTECODE=1
+ENV OMP_NUM_THREADS=1
+ENV CUDA_VISIBLE_DEVICES=0
+
+# Install system dependencies
+RUN apt-get update && apt-get install -y \
+    git \
+    curl \
+    wget \
+    unzip \
+    software-properties-common \
+    apt-transport-https \
+    ca-certificates \
+    gnupg \
+    lsb-release \
+    libgl1-mesa-glx \
+    libglib2.0-0 \
+    libsm6 \
+    libxext6 \
+    libxrender-dev \
+    libgomp1 \
+    libgcc-s1 \
+    libstdc++6 \
+    libgfortran5 \
+    libquadmath0 \
+    libblas3 \
+    liblapack3 \
+    libatlas-base-dev \
+    gfortran \
+    && rm -rf /var/lib/apt/lists/*
+
+# Create working directory
+WORKDIR /workspace
+
+# Force NumPy to 1.x version for PyTorch compatibility
+RUN pip install --no-cache-dir --upgrade pip setuptools wheel
+RUN pip uninstall -y numpy || true
+RUN pip install --no-cache-dir "numpy==1.24.3"
+
+# Copy requirements and install with Jetson-optimized versions
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt --force-reinstall
+
+# Force NumPy version again after requirements install
+RUN pip install --no-cache-dir "numpy==1.24.3" --force-reinstall
+
+# Install Jetson-optimized packages
+RUN pip install --no-cache-dir \
+    rich \
+    watchdog \
+    GPUtil \
+    opencv-python-headless>=4.5.0 \
+    albumentations \
+    pycocotools \
+    roboflow \
+    ultralytics
+
+# Copy the entire project
+COPY . /workspace/
+
+# Create necessary directories for the pipeline
+RUN mkdir -p \
+    test_ingest \
+    test_work \
+    test_metadata \
+    test_detections \
+    test_thumbs \
+    test_outbox \
+    test_logs \
+    test_georeferenced \
+    test_postprocessed \
+    test_denoising \
+    test_results
+
+# Set permissions
+RUN chmod +x demo.py
+RUN chmod +x denoise_hrsid_val.py
+RUN chmod +x detect.py
+RUN chmod +x train.py
+RUN chmod +x val.py
+
+# Create Jetson-optimized startup script
+RUN echo '#!/bin/bash\n\
+echo "SAR Ship Detection Pipeline - Jetson AGX Orin"\n\
+echo "============================================="\n\
+echo "Jetson Optimization:"\n\
+echo "  - ARM64 architecture optimized"\n\
+echo "  - CUDA 11.4 compatible"\n\
+echo "  - TensorRT acceleration ready"\n\
+echo ""\n\
+echo "Available commands:"\n\
+echo "  python demo.py                    - Run the full demo"\n\
+echo "  python detect.py --source test_ingest/ --weights runs/train/experiment4/weights/best.pt --device 0  - Test detection with GPU"\n\
+echo "  python -c "import torch; print(f\"CUDA available: {torch.cuda.is_available()}\"); print(f\"Device count: {torch.cuda.device_count()}\")" - Check GPU"\n\
+echo "  bash                               - Get a shell"\n\
+echo ""\n\
+echo "To run the demo, use: python demo.py"\n\
+echo "To check GPU status, use: python -c \"import torch; print(torch.cuda.is_available())\""\n\
+echo "To get a shell, use: bash"\n\
+echo ""\n\
+exec "$@"' > /workspace/entrypoint.sh
+
+RUN chmod +x /workspace/entrypoint.sh
+
+# Set the entrypoint
+ENTRYPOINT ["/workspace/entrypoint.sh"]
+
+# Default command
+CMD ["python", "demo.py"] 
