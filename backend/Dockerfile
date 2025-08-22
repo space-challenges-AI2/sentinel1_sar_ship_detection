@@ -2,7 +2,7 @@
 FROM python:3.9-slim
 
 # 1.2 Install the missing system dependency for OpenCV
-RUN apt-get update && apt-get install -y libgl1-mesa-glx
+RUN apt-get update && apt-get install -y libgl1
 
 # 2. Set the working directory inside the container
 WORKDIR /app
