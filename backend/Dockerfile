@@ -2,7 +2,7 @@
 FROM python:3.9-slim
 
 # 1.2 Install the missing system dependency for OpenCV
-RUN apt-get update && apt-get install -y libgl1
+RUN apt-get update && apt-get install -y libgl1 libglib2.0-0 libsm6 libxext6 libxrender-dev
 
 # 2. Set the working directory inside the container
 WORKDIR /app
