@@ -1,10 +1,24 @@
+
 """
-fabf.py - Fast Adaptive Bilateral Filter (reference Python implementation)
+fabf.py - Fast Adaptive Bilateral Filter + Contrast Enhancement
+    This code is an implementation of the FABF algorihtm for speckle reduction. It is basically a blurring function that preserves
+    edges and blurs (Gaussean blur) at a given strength (sigma param.), up to a given amount of pixels away (kernel size = rho param.).
+    It's adaptive in how much it blurs each portion of the image using a polinomial approximation of the N-th order.
+    
+    Raising rho and sigma marginally increases compute time; Raising N substantially increases compute time.
+    
+    For ships in an image with low spatial resolution, rho should be kept low (rho=3), so as to not blur away the edges of ships;
+    Sigma should be kept around 0.1 and you can experimentally find the best number (for us sigma=0.115)
+    The polinomial order substantially improves the quality of the final image, but for the bright ships on the black sea background, N=1 is enough
+    
+    After that, speckles appear to be almost "melted" in the sea, which thus becomes brighter.
+    Because of that, the contrast is raised to accentuate edges and ships
 
 Public API:
-    adaptive_bilateral_filter(f, sigma_map=None, theta_map=None, rho=5.0, N=5, out_path=None, clip=True)
+    adaptive_bilateral_filter(f, sigma_map=0.115, theta_map=None, rho=3, N=1, out_path=None, clip=True)
 
-Author: @niko-dil (Nikola Lilov)
+Author:
+    Nikola D. Lilov, AI Team 2, August 2025.
 """
 
 import numpy as np
@@ -16,7 +30,19 @@ def _ensure_float01(img):
         img = img / 255.0
     return img
 
-def adaptive_bilateral_filter(f, sigma_map=None, theta_map=None, rho=5.0, N=5, out_path=None, clip=True):
+def increase_contrast(img, factor=1.5):
+    """
+    Increase image contrast by a given factor (default 1.5 = +50%).
+    """
+    img = img.astype(np.float64)
+    if img.max() > 1.0:
+        img = img / 255.0
+    mean = 0.5
+    out = mean + factor * (img - mean)
+    out = np.clip(out, 0.0, 1.0)
+    return (out * 255.0).round().astype(np.uint8)
+
+def adaptive_bilateral_filter(f, sigma_map=0.115, theta_map=None, rho=3, N=1, contrast=1.33, out_path=None, clip=True):
     is_color = (f.ndim == 3 and f.shape[2] == 3)
     orig_dtype = f.dtype
     f_arr = _ensure_float01(f.copy())
@@ -34,14 +60,8 @@ def adaptive_bilateral_filter(f, sigma_map=None, theta_map=None, rho=5.0, N=5, o
     if np.issubdtype(orig_dtype, np.integer):
         out = (out * 255.0).round().astype(orig_dtype)
 
-    # Increase contrast
-    out = out.astype(np.float64)
-    if out.max() > 1.0:
-        out = out / 255.0
-    mean = 0.5
-    out = mean + 1.25 * (out - mean) # 1.1 is the factor which is to be implement as an argument called "contrast" for this function
-    out = np.clip(out, 0.0, 1.0)
-    return (out * 255.0).round().astype(np.uint8)
+    final = increase_contrast(out,contrast)
+    return final
 
 def _fabf_channel(f, sigma_map, theta_map, rho, N):
     eps = 1e-12
@@ -158,3 +178,45 @@ def _fabf_channel(f, sigma_map, theta_map, rho, N):
     out = np.where(denom_small, f, alpha + diff * (T1 / (T2 + 1e-300)))
     out[diff < 1e-12] = f[diff < 1e-12]
     return out
+
+if __name__ == "__main__":
+    import sys
+    from PIL import Image
+    import matplotlib.pyplot as plt
+    from time import time
+
+    if len(sys.argv) < 2:
+        print("Usage: python fabf.py <image_file>")
+        sys.exit(1)
+
+    # Numpy array
+    img_path = sys.argv[1]
+    img = Image.open(img_path).convert("L")  # SAR (grayscale)
+    img_np = np.array(img)
+
+    # Apply FABF without contrast boost
+    start = time()
+    fabf_no_contrast = adaptive_bilateral_filter(img_np, contrast=1.0)
+
+    # Manually apply contrast enhancement
+    fabf_with_contrast = increase_contrast(fabf_no_contrast, factor=1.1)
+    end = time()
+
+    print(f"Time: {end-start}s")
+
+    # Plot results
+    fig, axes = plt.subplots(1, 3, figsize=(12, 5))
+    axes[0].imshow(img_np, cmap="gray")
+    axes[0].set_title("Original")
+    axes[0].axis("off")
+
+    axes[1].imshow(fabf_no_contrast, cmap="gray")
+    axes[1].set_title("FABF (no contrast)")
+    axes[1].axis("off")
+
+    axes[2].imshow(fabf_with_contrast, cmap="gray")
+    axes[2].set_title("Final (with contrast)")
+    axes[2].axis("off")
+
+    plt.tight_layout()
+    plt.show()
